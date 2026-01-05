@@ -1,1 +1,382 @@
-.
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <title>OLED Animation Editor</title>
+
+   <style>
+      @import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap');
+
+      * {
+         box-sizing: border-box;
+         margin: 0;
+         padding: 0;
+         -webkit-font-smoothing: antialiased;
+         font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+         line-height: 1;
+         user-select: none;
+      }
+
+      ::-webkit-scrollbar {
+         display: none;
+      }
+
+      body {
+         background-color: #111;
+         color: #999;
+      }
+
+      .container {
+         height: 100vh;
+         display: grid;
+         grid-template-columns: 2fr 1fr 1fr;
+      }
+
+      .buttons {
+         display: flex;
+         align-items: center;
+         gap: 1rem;
+      }
+
+      .button {
+         width: fit-content;
+         padding: .5rem;
+         background-color: #222;
+      }
+
+      .button:hover {
+         background-color: #333;
+      }
+
+      input[type="text"] {
+         all: unset;
+         height: 100%;
+         padding: 0 .5rem;
+         font-family: "Roboto", sans-serif;
+         background-color: #222;
+      }
+
+      #onionSkin.checked,
+      #animate.checked {
+         background-color: #333;
+      }
+
+      .editor {
+         padding: 1rem;
+         display: flex;
+         flex-direction: column;
+         gap: 1rem;
+      }
+
+      canvas {
+         background-color: black;
+         image-rendering: pixelated;
+      }
+
+      .frames {
+         padding: 1rem 0;
+         display: grid;
+         grid-template-columns: 1fr 1fr 1fr;
+         align-content: start;
+         gap: 0.5rem;
+         overflow-y: auto;
+      }
+
+      .frame {
+         width: 100%;
+         aspect-ratio: 2/1;
+         background-color: black;
+         cursor: pointer;
+         image-rendering: pixelated;
+         box-sizing: content-box;
+      }
+
+      .output {
+         padding: 1rem;
+         display: flex;
+         flex-direction: column;
+         gap: 1rem;
+      }
+
+      textarea {
+         all: unset;
+         box-sizing: border-box;
+         width: 100%;
+         height: 100%;
+         padding: .5rem;
+         background-color: black;
+         font-family: monospace;
+         white-space: pre-wrap;
+         word-break: break-word;
+         resize: none;
+      }
+   </style>
+</head>
+
+<body>
+   <div class="container">
+      <div class="editor">
+         <div class="buttons">
+            Scale:
+            <input type="text" id="scale" value="1" size="5" autocomplete="off" autocorrect="off">
+            <div class="button" id="onionSkin">Onion Skin</div>
+         </div>
+         <canvas id="canvas" width="128" height="64"></canvas>
+         <div class="buttons">
+            <div class="button" id="add">Add Frame</div>
+            <div class="button" id="delete">Delete Frame</div>
+            <div class="button" id="duplicate">Duplicate Frame</div>
+            <div class="button" id="clear">Clear Frame</div>
+            Delay (ms):
+            <input type="text" id="delay" value="200" size="5" autocomplete="off" autocorrect="off">
+            <div class="button" id="animate">Start / Stop</div>
+         </div>
+      </div>
+
+      <div class="frames">
+         <div class="frame"></div>
+      </div>
+
+      <div class="output">
+         <div class="buttons">
+            <div class="button" id="generateC">Generate C</div>
+            <div class="button" id="generatePython">Generate Python</div>
+            <div class="button" id="copy">Copy Text</div>
+         </div>
+         <textarea name="" id="" autocorrect="off" readonly></textarea>
+      </div>
+   </div>
+
+   <script>
+      const W = 128, H = 64;
+      let frames = [blankFrame()];
+      let current = 0;
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      ctx.imageSmoothingEnabled = false;
+      let scale = 8;
+      canvas.style.width = W * scale + "px";
+      canvas.style.height = H * scale + "px";
+      let mouseDown = false;
+      let simSize = 1;
+      let animating = false;
+      let timer = null;
+      let hoverBlock = null;
+      let onionSkin = false;
+      const frameCache = new Map();
+      draw();
+      document.getElementById("scale").oninput = e => {
+         simSize = Math.max(1, parseInt(e.target.value) || 1);
+      };
+      document.getElementById("onionSkin").onclick = function () {
+         onionSkin = !onionSkin;
+         this.classList.toggle("checked", onionSkin);
+         draw();
+      };
+      canvas.addEventListener("contextmenu", e => e.preventDefault());
+      canvas.onmousedown = e => {
+         mouseDown = true;
+         handlePaintEvent(e);
+      };
+      canvas.onmousemove = e => {
+         updateHover(e);
+         if (mouseDown) handlePaintEvent(e);
+      };
+      canvas.onmouseleave = () => {
+         hoverBlock = null;
+         draw();
+      };
+      window.onmouseup = () => mouseDown = false;
+      function handlePaintEvent(e) {
+         if (e.buttons & 1) paint(e, 1);
+         else if (e.buttons & 2) paint(e, 0);
+      }
+      function updateHover(e) {
+         const rect = canvas.getBoundingClientRect();
+         let x = Math.floor((e.clientX - rect.left) / scale);
+         let y = Math.floor((e.clientY - rect.top) / scale);
+         x = Math.floor(x / simSize) * simSize;
+         y = Math.floor(y / simSize) * simSize;
+         if (x >= 0 && y >= 0 && x < W && y < H) {
+            hoverBlock = { x, y };
+         } else {
+            hoverBlock = null;
+         }
+         draw();
+      }
+      function paint(e, val) {
+         const rect = canvas.getBoundingClientRect();
+         let x = Math.floor((e.clientX - rect.left) / scale);
+         let y = Math.floor((e.clientY - rect.top) / scale);
+         x = Math.floor(x / simSize) * simSize;
+         y = Math.floor(y / simSize) * simSize;
+         for (let yy = 0; yy < simSize; yy++) {
+            for (let xx = 0; xx < simSize; xx++) {
+               if (x + xx < W && y + yy < H) {
+                  frames[current][y + yy][x + xx] = val;
+               }
+            }
+         }
+         frameCache.delete(current);
+         draw();
+         updateTimeline();
+      }
+      function draw() {
+         ctx.fillStyle = "#000";
+         ctx.fillRect(0, 0, W, H);
+         if (onionSkin && current > 0) {
+            ctx.globalAlpha = 0.25;
+            renderFrame(frames[current - 1]);
+            ctx.globalAlpha = 1;
+         }
+         renderFrame(frames[current]);
+         if (hoverBlock) {
+            ctx.fillStyle = "rgba(0,255,0,0.25)";
+            ctx.fillRect(hoverBlock.x, hoverBlock.y, simSize, simSize);
+         }
+      }
+      function renderFrame(f) {
+         ctx.fillStyle = "white";
+         for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+               if (f[y][x]) ctx.fillRect(x, y, 1, 1);
+            }
+         }
+      }
+      function blankFrame() {
+         return Array(H).fill(0).map(() => Array(W).fill(0));
+      }
+      document.getElementById("add").onclick = () => {
+         frames.push(blankFrame());
+         current = frames.length - 1;
+         updateTimeline();
+         draw();
+      }
+      document.getElementById("duplicate").onclick = () => {
+         frames.splice(current + 1, 0, JSON.parse(JSON.stringify(frames[current])));
+         current++;
+         updateTimeline();
+         draw();
+      }
+      document.getElementById("delete").onclick = () => {
+         if (frames.length > 1) {
+            frameCache.delete(current);
+            frames.splice(current, 1);
+            current = Math.max(0, current - 1);
+            frameCache.clear();
+            updateTimeline();
+            draw();
+         }
+      }
+      document.getElementById("clear").onclick = () => {
+         frames[current] = blankFrame();
+         frameCache.delete(current);
+         updateTimeline();
+         draw();
+      }
+      function updateTimeline() {
+         const container = document.querySelector(".frames");
+         container.innerHTML = "";
+         frames.forEach((f, i) => {
+            let c;
+            if (frameCache.has(i)) {
+               c = frameCache.get(i);
+            } else {
+               c = document.createElement("canvas");
+               c.width = 128;
+               c.height = 64;
+               c.className = "frame";
+               const ct = c.getContext("2d", { alpha: false });
+               ct.imageSmoothingEnabled = false;
+               ct.fillStyle = "#000";
+               ct.fillRect(0, 0, 128, 64);
+               ct.fillStyle = "white";
+               for (let y = 0; y < H; y++) {
+                  for (let x = 0; x < W; x++) {
+                     if (f[y][x]) ct.fillRect(x, y, 1, 1);
+                  }
+               }
+               frameCache.set(i, c);
+            }
+            if (i === current) {
+               c.style.outline = "2px solid #0f0";
+            } else {
+               c.style.outline = "";
+            }
+            c.onclick = () => {
+               current = i;
+               updateTimeline();
+               draw();
+            }
+            container.appendChild(c);
+         });
+      }
+      updateTimeline();
+      document.getElementById("animate").onclick = function () {
+         animating = !animating;
+         this.classList.toggle("checked", animating);
+         if (animating) {
+            let delay = Math.max(1, parseInt(document.getElementById("delay").value) || 200);
+            timer = setInterval(() => {
+               current = (current + 1) % frames.length;
+               updateTimeline();
+               draw();
+            }, delay);
+         } else {
+            clearInterval(timer);
+         }
+      }
+      document.getElementById("generateC").onclick = () => exportData("c");
+      document.getElementById("generatePython").onclick = () => exportData("py");
+      function exportData(type) {
+         let bytes = [];
+         frames.forEach(f => {
+            for (let page = 0; page < H / 8; page++) {
+               for (let x = 0; x < W; x++) {
+                  let b = 0;
+                  for (let bit = 0; bit < 8; bit++) {
+                     if (f[page * 8 + bit][x]) {
+                        b |= (1 << bit);
+                     }
+                  }
+                  bytes.push(b);
+               }
+            }
+         });
+         let out = "";
+         if (type === "c") {
+            out += `const byte frames[][${W * H / 8}] = {\n`;
+            let i = 0;
+            frames.forEach(() => {
+               out += " {";
+               for (let j = 0; j < W * H / 8; j++) {
+                  out += bytes[i++] + (j < W * H / 8 - 1 ? "," : "");
+               }
+               out += "},\n";
+            });
+            out += "};";
+         } else {
+            out += "[\n";
+            let i = 0;
+            frames.forEach(() => {
+               out += " [";
+               for (let j = 0; j < W * H / 8; j++) {
+                  out += bytes[i++] + (j < W * H / 8 - 1 ? "," : "");
+               }
+               out += "],\n";
+            });
+            out += "]";
+         }
+         document.querySelector("textarea").value = out;
+      }
+      document.getElementById("copy").onclick = () => {
+         const textarea = document.querySelector("textarea");
+         textarea.select();
+         document.execCommand("copy");
+      }
+   </script>
+</body>
+
+</html>
